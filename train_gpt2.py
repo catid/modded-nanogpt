@@ -552,7 +552,7 @@ for step in range(args.num_iterations + 1):
             x_val, y_val = val_loader.next_batch()
             with ctx: # of course, we'd like to use no_grad() here too, but that creates a torch.compile error for some reason
                 #loss = model(x_val, y_val, return_loss=True)
-                loss = model(x_val, y_val, return_logits=False)
+                _, loss = model(x_val, y_val, return_logits=False)
                 val_loss += loss.detach()
                 del loss
         dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
@@ -609,7 +609,7 @@ for step in range(args.num_iterations + 1):
         # forward pass
         with ctx:
             #loss = model(x, y, return_loss=True)
-            loss = model(x, y, return_logits=False)
+            _, loss = model(x, y, return_logits=False)
             train_loss = loss.detach()
 
         model.polyak_state.update_loss(train_loss.item())
