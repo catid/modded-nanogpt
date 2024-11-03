@@ -437,6 +437,10 @@ def split_param_groups(model):
         # First check for token_embed parameters
         if 'token_embed' in name:
             token_embed_params.append((name, param))
+        elif 'wte' in name:
+            token_embed_params.append((name, param))
+        elif 'lm_head' in name:
+            params_1d.append((name, param))
         # Then check dimensionality
         elif len(param.shape) == 2:
             params_2d.append((name, param))
@@ -547,7 +551,8 @@ for step in range(args.num_iterations + 1):
         for _ in range(val_steps):
             x_val, y_val = val_loader.next_batch()
             with ctx: # of course, we'd like to use no_grad() here too, but that creates a torch.compile error for some reason
-                loss = model(x_val, y_val, return_loss=True)
+                #loss = model(x_val, y_val, return_loss=True)
+                loss = model(x_val, y_val, return_logits=False)
                 val_loss += loss.detach()
                 del loss
         dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
@@ -603,7 +608,8 @@ for step in range(args.num_iterations + 1):
     for i in range(1, curr_accumulation_steps+1):
         # forward pass
         with ctx:
-            loss = model(x, y, return_loss=True)
+            #loss = model(x, y, return_loss=True)
+            loss = model(x, y, return_logits=False)
             train_loss = loss.detach()
 
         model.polyak_state.update_loss(train_loss.item())
