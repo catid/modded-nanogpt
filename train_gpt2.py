@@ -118,6 +118,34 @@ class Muon(torch.optim.Optimizer):
                 p.data.add_(g, alpha=-lr)
                 curr_idx += p.numel()
 
+class GDPolyakState:
+    def __init__(self, window_size=20, stability_threshold=0.25, target_loss=3.2):
+        self.loss_window = []
+        self.window_size = window_size
+        self.stability_threshold = stability_threshold
+        self.target_loss = target_loss
+
+    def update_loss(self, loss):
+        self.loss_window.append(loss)
+        if len(self.loss_window) > self.window_size:
+            self.loss_window.pop(0)
+            
+    def is_loss_stable(self):
+        if len(self.loss_window) < self.window_size:
+            return False
+        
+        # Calculate rate of change over window
+        loss_changes = [abs(self.loss_window[i+1] - self.loss_window[i]) 
+                       for i in range(len(self.loss_window)-1)]
+        avg_change = sum(loss_changes) / len(loss_changes)
+        return avg_change < self.stability_threshold
+    
+    def should_take_polyak_step(self):
+        if self.is_loss_stable():
+            self.loss_window = []
+            return True
+        return False
+
 # -----------------------------------------------------------------------------
 # PyTorch nn.Module definitions for the GPT-2 model
 
@@ -454,6 +482,8 @@ optimizer2 = torch.optim.Adam(param_groups['1d'], lr=0.003, betas=(0.9, 0.95), f
 optimizer3 = Muon(param_groups['2d'], lr=0.02, momentum=0.95)
 optimizers = [optimizer1, optimizer2, optimizer3]
 
+model.polyak_state = GDPolyakState()
+
 # learning rate decay scheduler (linear warmup and warmdown)
 def get_lr(it):
     assert it <= args.num_iterations
@@ -551,15 +581,28 @@ for step in range(args.num_iterations + 1):
 
     # --------------- TRAINING SECTION BEGIN -----------------
     model.train()
-    for i in range(1, train_accumulation_steps+1):
+
+    polyak_step = model.polyak_state.should_take_polyak_step()
+
+    # Handle normal vs Polyak training
+    if polyak_step:
+        # Double the accumulation steps for larger batch
+        curr_accumulation_steps = train_accumulation_steps * 2
+    else:
+        curr_accumulation_steps = train_accumulation_steps
+
+    for i in range(1, curr_accumulation_steps+1):
         # forward pass
         with ctx:
             loss = model(x, y, return_loss=True)
             train_loss = loss.detach()
+
+        model.polyak_state.update_loss(train_loss.item())
+
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
         # backward pass
-        if i < train_accumulation_steps:
+        if i < curr_accumulation_steps:
             with model.no_sync(): # there's no need to sync gradients every accumulation step
                 loss.backward()
         else:
@@ -567,11 +610,43 @@ for step in range(args.num_iterations + 1):
     for name, p in model.named_parameters():
         if p.grad is None:
             print(f"{name}: No gradient")
-        p.grad /= train_accumulation_steps
-    # step the optimizers and schedulers
-    for opt, sched in zip(optimizers, schedulers):
-        opt.step()
-        sched.step()
+        p.grad /= curr_accumulation_steps
+
+    # Handle Polyak step if in Polyak mode
+    if polyak_step:
+        current_loss = train_loss.item()
+        loss_diff = current_loss - model.polyak_state.target_loss
+        
+        print(f"Applying polyak step with loss_diff={loss_diff}")
+        
+        # Apply Polyak update directly to parameters
+        for group in optimizer3.param_groups:
+            for p in group['params']:
+                if p.grad is not None:
+                    grad_norm_squared = p.grad.norm().item() ** 2
+                    if grad_norm_squared > 0:
+                        # Calculate per-parameter Polyak learning rate
+                        param_lr = loss_diff / grad_norm_squared
+                        # Apply update directly
+                        p.data.add_(p.grad, alpha=-param_lr)
+        
+        # Initialize fresh state for the optimizer
+        optimizer3.state = {}
+        for group in optimizer3.param_groups:
+            for p in group['params']:
+                optimizer3.state[p] = {}  # Initialize empty state for each parameter
+    else:
+        # Normal optimization step
+        optimizer3.step()
+        
+    # step the other optimizers and schedulers
+    optimizer1.step()
+    optimizer2.step()
+    # Only update schedulers in normal mode
+    if not polyak_step:
+        for sched in schedulers:
+            sched.step()
+
     # null the gradients
     model.zero_grad(set_to_none=True)
     # --------------- TRAINING SECTION END -------------------
