@@ -337,8 +337,8 @@ class Hyperparameters:
     input_bin : str = 'data/fineweb10B/fineweb_train_*.bin' # input .bin to train on
     input_val_bin : str = 'data/fineweb10B/fineweb_val_*.bin' # input .bin to eval validation loss on
     # optimization hyperparams
-    batch_size : int = 8*64 # batch size, in sequences, across all devices
-    device_batch_size : int = 64 # batch size, in sequences, per device
+    batch_size : int = 2*10 # batch size, in sequences, across all devices
+    device_batch_size : int = 10 # batch size, in sequences, per device
     sequence_length : int = 1024 # sequence length, in tokens
     num_iterations : int = 4578 # number of iterations to run
     warmup_iters : int = 0
@@ -381,21 +381,79 @@ x, y = train_loader.next_batch()
 # there are only 50257 unique GPT-2 tokens; we extend to nearest multiple of 128 for efficiency. suggested to me by @Grad62304977.
 # this originates from Karpathy's experiments.
 num_vocab = 50304
-model = GPT(GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=6, n_embd=768))
+
+from ngpt import nGPT
+model = nGPT(num_tokens=num_vocab, dim=768, heads=6, depth=12)
+
+def split_param_groups(model):
+    """
+    Split model parameters into three groups:
+    1. token_embed parameters
+    2. 2D parameters (excluding token_embed)
+    3. 1D parameters (scale parameters)
+    
+    Returns:
+    - dict with 'token_embed', '2d', and '1d' parameter lists, where each element is (name, param)
+    """
+    token_embed_params = []
+    params_2d = []
+    params_1d = []
+    
+    for name, param in model.named_parameters():
+        # Skip parameters that don't require gradients
+        if not param.requires_grad:
+            continue
+            
+        # First check for token_embed parameters
+        if 'token_embed' in name:
+            token_embed_params.append((name, param))
+        # Then check dimensionality
+        elif len(param.shape) == 2:
+            params_2d.append((name, param))
+        else:
+            params_1d.append((name, param))
+            
+    if int(os.environ.get('RANK', 0)) == 0:  # Only print from rank 0
+        print("\nParameter Group Analysis:")
+        print(f"Token Embed parameters: {len(token_embed_params)}")
+        for name, p in token_embed_params:
+            print(f"  {name}: {p.shape}")
+            
+        print(f"\n2D parameters: {len(params_2d)}")
+        for name, p in params_2d:
+            print(f"  {name}: {p.shape}")
+            
+        print(f"\n1D scale parameters: {len(params_1d)}")
+        for name, p in params_1d:
+            print(f"  {name}: {p.shape}")
+    
+    param_groups = {
+        'token_embed': [p for _, p in token_embed_params],
+        '2d': [p for _, p in params_2d],
+        '1d': [p for _, p in params_1d]
+    }
+    
+    return param_groups
+
+#model = GPT(GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=6, n_embd=768))
+
 model = model.cuda()
 if hasattr(config, "coordinate_descent_tuning"):
     config.coordinate_descent_tuning = True # suggested by @Chillee
-model = torch.compile(model)
+#model = torch.compile(model)
 # here we wrap model into DDP container
 model = DDP(model, device_ids=[ddp_local_rank])
 raw_model = model.module # always contains the "raw" unwrapped model
 ctx = torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)
 
+param_groups = split_param_groups(raw_model)
+
 # init the optimizer(s)
-optimizer1 = torch.optim.Adam([raw_model.transformer.wte.weight], lr=0.3,   betas=(0.9, 0.95), fused=True)
-optimizer2 = torch.optim.Adam([raw_model.lm_head.weight],         lr=0.003, betas=(0.9, 0.95), fused=True)
-optimizer3 = Muon(raw_model.transformer.h.parameters(),           lr=0.02,  momentum=0.95)
+optimizer1 = torch.optim.Adam(param_groups['token_embed'], lr=0.3, betas=(0.9, 0.95), fused=True)
+optimizer2 = torch.optim.Adam(param_groups['1d'], lr=0.003, betas=(0.9, 0.95), fused=True)
+optimizer3 = Muon(param_groups['2d'], lr=0.02, momentum=0.95)
 optimizers = [optimizer1, optimizer2, optimizer3]
+
 # learning rate decay scheduler (linear warmup and warmdown)
 def get_lr(it):
     assert it <= args.num_iterations
@@ -459,7 +517,7 @@ for step in range(args.num_iterations + 1):
         for _ in range(val_steps):
             x_val, y_val = val_loader.next_batch()
             with ctx: # of course, we'd like to use no_grad() here too, but that creates a torch.compile error for some reason
-                _, loss = model(x_val, y_val, return_logits=False)
+                loss = model(x_val, y_val, return_loss=True)
                 val_loss += loss.detach()
                 del loss
         dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
@@ -496,7 +554,7 @@ for step in range(args.num_iterations + 1):
     for i in range(1, train_accumulation_steps+1):
         # forward pass
         with ctx:
-            _, loss = model(x, y, return_logits=False)
+            loss = model(x, y, return_loss=True)
             train_loss = loss.detach()
         # advance the dataset for the next batch
         x, y = train_loader.next_batch()
@@ -506,7 +564,9 @@ for step in range(args.num_iterations + 1):
                 loss.backward()
         else:
             loss.backward() # just sync on the last step
-    for p in model.parameters():
+    for name, p in model.named_parameters():
+        if p.grad is None:
+            print(f"{name}: No gradient")
         p.grad /= train_accumulation_steps
     # step the optimizers and schedulers
     for opt, sched in zip(optimizers, schedulers):
