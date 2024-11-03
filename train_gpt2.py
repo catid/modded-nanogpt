@@ -119,7 +119,7 @@ class Muon(torch.optim.Optimizer):
                 curr_idx += p.numel()
 
 class GDPolyakState:
-    def __init__(self, window_size=20, stability_threshold=0.5, target_loss=3.2):
+    def __init__(self, window_size=20, stability_threshold=0.5, target_loss=3.0):
         self.loss_window = []
         self.window_size = window_size
         self.stability_threshold = stability_threshold
@@ -597,6 +597,9 @@ for step in range(args.num_iterations + 1):
     # Broadcast polyak decision from rank 0 to all processes
     dist.broadcast(polyak_tensor, src=0)
     polyak_step = bool(polyak_tensor.item())
+
+    # Disable GDPolyak
+    polyak_step = False
 
     # Handle normal vs Polyak training
     if polyak_step:
