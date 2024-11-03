@@ -119,7 +119,7 @@ class Muon(torch.optim.Optimizer):
                 curr_idx += p.numel()
 
 class GDPolyakState:
-    def __init__(self, window_size=20, stability_threshold=0.25, target_loss=3.2):
+    def __init__(self, window_size=20, stability_threshold=0.5, target_loss=3.2):
         self.loss_window = []
         self.window_size = window_size
         self.stability_threshold = stability_threshold
@@ -134,11 +134,12 @@ class GDPolyakState:
         if len(self.loss_window) < self.window_size:
             return False
         
-        # Calculate rate of change over window
-        loss_changes = [abs(self.loss_window[i+1] - self.loss_window[i]) 
-                       for i in range(len(self.loss_window)-1)]
-        avg_change = sum(loss_changes) / len(loss_changes)
-        return avg_change < self.stability_threshold
+        # Calculate max-min difference over window
+        max_loss = max(self.loss_window)
+        min_loss = min(self.loss_window)
+        range_size = max_loss - min_loss
+        
+        return range_size < self.stability_threshold
     
     def should_take_polyak_step(self):
         if self.is_loss_stable():
@@ -635,10 +636,12 @@ for step in range(args.num_iterations + 1):
         for group in optimizer3.param_groups:
             for p in group['params']:
                 optimizer3.state[p] = {}  # Initialize empty state for each parameter
+
+        dist.barrier()
     else:
         # Normal optimization step
         optimizer3.step()
-        
+
     # step the other optimizers and schedulers
     optimizer1.step()
     optimizer2.step()
