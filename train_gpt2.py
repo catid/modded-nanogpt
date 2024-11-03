@@ -602,7 +602,6 @@ for step in range(args.num_iterations + 1):
         curr_accumulation_steps = train_accumulation_steps
 
     for i in range(1, curr_accumulation_steps+1):
-        print(f"{i}/{curr_accumulation_steps}")
         # forward pass
         with ctx:
             loss = model(x, y, return_loss=True)
