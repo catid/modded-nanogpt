@@ -637,6 +637,10 @@ for step in range(args.num_iterations + 1):
                     if grad_norm_squared > 0:
                         # Calculate per-parameter Polyak learning rate
                         param_lr = loss_diff / grad_norm_squared
+                        if param_lr > 1.0:
+                            param_lr = 1.0
+                        elif param_lr < 0.02:
+                            param_lr = 0.02
                         # Apply update directly
                         p.data.add_(p.grad, alpha=-param_lr)
         
