@@ -580,12 +580,19 @@ for step in range(args.num_iterations + 1):
     if last_step:
         break
 
-    print(f"STARTING TRAIN")
-
     # --------------- TRAINING SECTION BEGIN -----------------
     model.train()
 
-    polyak_step = model.polyak_state.should_take_polyak_step()
+    # Only node 0 decides on polyak step
+    if master_process:
+        polyak_step = model.polyak_state.should_take_polyak_step()
+        polyak_tensor = torch.tensor([1 if polyak_step else 0], device=device)
+    else:
+        polyak_tensor = torch.tensor([0], device=device)
+
+    # Broadcast polyak decision from rank 0 to all processes
+    dist.broadcast(polyak_tensor, src=0)
+    polyak_step = bool(polyak_tensor.item())
 
     # Handle normal vs Polyak training
     if polyak_step:
@@ -615,8 +622,6 @@ for step in range(args.num_iterations + 1):
         if p.grad is None:
             print(f"{name}: No gradient")
         p.grad /= curr_accumulation_steps
-
-    print(f"OPT STEP")
 
     # Handle Polyak step if in Polyak mode
     if polyak_step:
@@ -650,8 +655,6 @@ for step in range(args.num_iterations + 1):
     # step the other optimizers and schedulers
     optimizer1.step()
     optimizer2.step()
-
-    print(f"SCHED STEP")
 
     # Only update schedulers in normal mode
     if not polyak_step:
