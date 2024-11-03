@@ -580,6 +580,8 @@ for step in range(args.num_iterations + 1):
     if last_step:
         break
 
+    print(f"STARTING TRAIN")
+
     # --------------- TRAINING SECTION BEGIN -----------------
     model.train()
 
@@ -593,6 +595,7 @@ for step in range(args.num_iterations + 1):
         curr_accumulation_steps = train_accumulation_steps
 
     for i in range(1, curr_accumulation_steps+1):
+        print(f"{i}/{curr_accumulation_steps}")
         # forward pass
         with ctx:
             loss = model(x, y, return_loss=True)
@@ -612,6 +615,8 @@ for step in range(args.num_iterations + 1):
         if p.grad is None:
             print(f"{name}: No gradient")
         p.grad /= curr_accumulation_steps
+
+    print(f"OPT STEP")
 
     # Handle Polyak step if in Polyak mode
     if polyak_step:
@@ -645,6 +650,9 @@ for step in range(args.num_iterations + 1):
     # step the other optimizers and schedulers
     optimizer1.step()
     optimizer2.step()
+
+    print(f"SCHED STEP")
+
     # Only update schedulers in normal mode
     if not polyak_step:
         for sched in schedulers:
