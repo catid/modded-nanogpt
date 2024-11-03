@@ -366,8 +366,8 @@ class Hyperparameters:
     input_bin : str = 'data/fineweb10B/fineweb_train_*.bin' # input .bin to train on
     input_val_bin : str = 'data/fineweb10B/fineweb_val_*.bin' # input .bin to eval validation loss on
     # optimization hyperparams
-    batch_size : int = 2*10 # batch size, in sequences, across all devices
-    device_batch_size : int = 10 # batch size, in sequences, per device
+    batch_size : int = 8*32 # batch size, in sequences, across all devices
+    device_batch_size : int = 32 # batch size, in sequences, per device
     sequence_length : int = 1024 # sequence length, in tokens
     num_iterations : int = 4578 # number of iterations to run
     warmup_iters : int = 0
