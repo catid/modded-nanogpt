@@ -412,8 +412,8 @@ x, y = train_loader.next_batch()
 num_vocab = 50304
 
 from ngpt import nGPT
-#model = nGPT(num_tokens=num_vocab, dim=768, heads=6, depth=12)
-model = GPT(GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=6, n_embd=768))
+model = nGPT(num_tokens=num_vocab, dim=768, heads=6, depth=12)
+#model = GPT(GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=6, n_embd=768))
 
 def split_param_groups(model):
     """
