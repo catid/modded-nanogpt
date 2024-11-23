@@ -7,6 +7,8 @@ import glob
 import time
 from dataclasses import dataclass
 
+from memory_layer import MemoryLayer
+
 import numpy as np
 import torch
 from torch import nn
@@ -160,6 +162,15 @@ class CastedLinear(nn.Linear):
     def forward(self, x):
         return F.linear(x, self.weight.to(x.dtype))
 
+class CastedMemoryLayer(torch.nn.Module):
+    def __init__(self, input_dim=512, output_dim=512, bias=False, K=64, tau=8):
+        super().__init__()
+        self.memory_layer = MemoryLayer(input_dim=input_dim, output_dim=output_dim, K=K, tau=tau)
+        # FIXME: Cast the weights to the correct dtype?
+
+    def forward(self, x):
+        return self.memory_layer(x)
+
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -168,11 +179,11 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.head_dim = self.n_embd // self.n_head
         assert self.n_embd % self.n_head == 0
-        self.c_q = CastedLinear(self.n_embd, self.n_embd, bias=False)
-        self.c_k = CastedLinear(self.n_embd, self.n_embd, bias=False)
-        self.c_v = CastedLinear(self.n_embd, self.n_embd, bias=False)
+        self.c_q = CastedMemoryLayer(self.n_embd, self.n_embd, bias=False)
+        self.c_k = CastedMemoryLayer(self.n_embd, self.n_embd, bias=False)
+        self.c_v = CastedMemoryLayer(self.n_embd, self.n_embd, bias=False)
         # output projection
-        self.c_proj = CastedLinear(self.n_embd, self.n_embd, bias=False)
+        self.c_proj = CastedMemoryLayer(self.n_embd, self.n_embd, bias=False)
         self.c_proj.weight.data.zero_() # zero init suggested by @Grad62304977
         self.rotary = Rotary(self.head_dim)
         self.lamb = nn.Parameter(torch.tensor(0.5)) # @Grad62304977
